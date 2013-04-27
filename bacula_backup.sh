@@ -28,7 +28,9 @@
 # - write total size of stored data to ONE common logfile 
 # - add '-m' parameter for mounting, always end with unmount 
 #
-# Speed tests:
+# Speed tests (
+# ------------------------
+# speedup due to direct access to the sparse file):
 # du ~/archiv
 # 1629024 /home/jb/archiv/
 #
@@ -41,6 +43,13 @@
 # real    3m6.736s
 # user    0m0.088s
 # sys     0m8.553s
+# ------------------------------
+# full_backup (copy whole $HOME, by rsync):
+# real    108m12.324s
+# user    14m51.456s
+# sys     17m36.450s
+#
+# empty_backup (copy only changed files - nearly none):
 #
 # To make sparse file:
 # # create file with potential size 3.2 TB
@@ -102,11 +111,23 @@ backup_file="private/backup_sparse_image"
 bacula_losetup="${HOME}/.secure/.bacula_losetup"
 filter_file="${HOME}/.secure/.filter_file"
 
+# script itself
+backup_script="${0}"
+
+# log file path - script dir + bacula_backup.log
+backup_log_file="${0%/*}/backula_backup.log"
+
 # How often the incremental backup is made - in hours.
 period_of_incremental_backup="24"
 
 # How often the full backup is made - in days.
 period_of_full_backup="30"
+
+
+# Empty if run in non-batch mode (i.e. from console).
+# Otherwise number of failures of backup_mount from 
+# the last regular call. On the failure, we plane the next call one hour later.
+RUN_ID=
 
 # creates creditial file for CIFS
 # located at ${credit_file}
@@ -345,9 +366,9 @@ function backup_mount {
     fi
   fi 
 
-  ls -l "${backup_mount_dir}"
-  user=`whoami`
-  sudo chown ${user}:${user} "${backup_mount_dir}"
+  #ls -l "${backup_mount_dir}/.."
+  #user=`whoami`
+  #sudo chown ${user}:${user} "${backup_mount_dir}"
 }
 
 
@@ -369,6 +390,7 @@ function make_backup {
   |sed 's|/$||' | sed 's|^.*/||' | head -n 1`"
   # last completed backup, that is not older than  ${period_of_incremental_backup} hours
   period_mins=$(( period_of_incremental_backup * 60 ))
+  #period_mins=1
   last_actual_backup="`find ${backup_mount_dir} -mindepth 1 -maxdepth 1 -mmin -${period_mins} -type d | grep -v "running_*" \
   |sed 's|/$||' | sed 's|^.*/||' | head -n 1`"
   # any last completed backup
@@ -419,7 +441,8 @@ function make_backup {
   if [ -z "${new_backup}" ]     # no rsync performed
   then
     umount_all
-  elif [ ( -z "${err}" ) -o ( "${err}" == "0" ) ]          # rsync without error ... remove running prefix
+  # elif [ -z "${err}"  -o  "${err}" == "0"  ]          # rsync without error ... remove running prefix
+  elif [ -z "${err}" -o "${err}" == "0" ]          # rsync without error ... remove running prefix
   then 
     mv "${backup_mount_dir}/${new_backup}" "${backup_mount_dir}/${new_backup#running_}"
     umount_all
@@ -441,6 +464,30 @@ function make_backup {
       fi     
   fi    
 }
+
+
+
+#
+#  Plans to run the script next day (for every day bacup)
+#
+function plan_next_day {
+at 14:30 tomorrow <<END
+  ${bacula_script} -rid 0
+END
+}  
+
+
+
+#
+#  Plans to rerun the script next hour (if the backup fails)
+#
+function plan_next_hour {
+at now + 15 minutes <<END
+  ${bacula_script} -rid ${RUN_ID}
+END
+}  
+
+
 
 
 
@@ -472,6 +519,10 @@ do
   elif [ "$1" == "-u" ]; then
     umount_all
     exit
+  elif [ "$1" == "-rid" ]; then
+    RUN_ID="$1"
+    shift
+    RUN_ID=$(( RUN_ID + 1 ))    
   else  
     backup_root=$1
     shift
@@ -484,11 +535,31 @@ if [ -n "$setup"  ]
 then
   setup
 else
+  # on regular batch call plan next regular backup call
+  if [ "${RUN_ID}" == "0" ]
+  then
+    plan_next_day
+  fi
+  
+  # try to mount the backup point
   if ! backup_mount
   then
-    echo "Some error occured. Try to use '-s' option to setup backup."
-    exit 2
+    if [ -z "${RUN_ID}" ]
+    then
+      echo "Some error occured. Try to use '-s' option to setup backup."
+      exit 2
+    else
+      if [ "${RUN_ID}" -lt "32" ]
+      then
+        plan_next_hour
+        exit 2
+      else
+        mail -s "bacula_backup can not mount the backup point" "jan.brezina@tul.cz"
+        exit 2
+      fi  
+    fi
   fi
+  
   make_backup
 fi
 

@@ -49,8 +49,12 @@
 # user    14m51.456s
 # sys     17m36.450s
 #
-# empty_backup (copy only changed files - nearly none):
 #
+# empty_backup (copy only changed files - nearly none):
+# real    6m38.486s
+# user    0m25.382s
+# sys     1m2.744s
+# 
 # To make sparse file:
 # # create file with potential size 3.2 TB
 # dd if=/dev/zero of=filename.img bs=1k seek=3200M count=1
@@ -378,7 +382,7 @@ function backup_mount {
 function make_backup {
 
   date_str=`date +%Y_%m_%d_%H%M%S`
-  backup_log_file=${HOME}/"backup_${date_str}.log"
+  #backup_log_file=${HOME}/"backup_${date_str}.log"
   
   # write ${filter_list} into filter file
   echo "${filter_list}" > ${filter_file}
@@ -425,15 +429,15 @@ function make_backup {
   # --progess   Progress for individual files.
   # -x          Do not cross filesystem boundaries. Prevents recursion.
   # --chmod ... alow user to read
-  DRY="-v --progress -x"
+  COMMON_OPT="--stats -x -a --delete"
   if [ "${new_backup%%full_*}" != "${new_backup}" ]
   then
       # make full backup
-      nice rsync ${DRY} -a --delete  --filter=". ${filter_file}" "${backup_root}/" "${backup_mount_dir}/${new_backup}" &>${backup_log_file}
+      time nice rsync ${COMMON_OPT} --filter=". ${filter_file}" "${backup_root}/" "${backup_mount_dir}/${new_backup}" &>${backup_log_file}
       err=$?    # get error code
   elif [ ! -z "${new_backup}" ]
   then
-      nice rsync ${DRY} -a --delete  --filter=". ${filter_file}" --link-dest="${backup_mount_dir}/${last_backup}" "${backup_root}/" "${backup_mount_dir}/${new_backup}" &>${backup_log_file}
+      time nice rsync ${DRY} --filter=". ${filter_file}" --link-dest="${backup_mount_dir}/${last_backup}" "${backup_root}/" "${backup_mount_dir}/${new_backup}" &>${backup_log_file}
       err=$?
   fi
   
@@ -481,7 +485,7 @@ END
 #
 #  Plans to rerun the script next hour (if the backup fails)
 #
-function plan_next_hour {
+function plan_next_hour {  
 at now + 15 minutes <<END
   ${bacula_script} -rid ${RUN_ID}
 END
@@ -520,9 +524,9 @@ do
     umount_all
     exit
   elif [ "$1" == "-rid" ]; then
+    shift
     RUN_ID="$1"
     shift
-    RUN_ID=$(( RUN_ID + 1 ))    
   else  
     backup_root=$1
     shift
@@ -551,6 +555,7 @@ else
     else
       if [ "${RUN_ID}" -lt "32" ]
       then
+        RUN_ID=$(( RUN_ID + 1 ))    
         plan_next_hour
         exit 2
       else

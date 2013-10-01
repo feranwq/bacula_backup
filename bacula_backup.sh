@@ -423,6 +423,11 @@ function make_backup {
     new_backup=""
   fi
   
+  # logging header
+  echo "==============================================================================================" >>${backup_log_file}
+  echo "${new_backup}" >> ${backup_log_file}
+  echo >> ${backup_log_file}
+    
 
   #DRY="-v -n" 
   # -v          Verbose.
@@ -430,14 +435,15 @@ function make_backup {
   # -x          Do not cross filesystem boundaries. Prevents recursion.
   # --chmod ... alow user to read
   COMMON_OPT="--stats -x -a --delete"
+  ulimit -u 1 
   if [ "${new_backup%%full_*}" != "${new_backup}" ]
   then
       # make full backup
-      time nice rsync ${COMMON_OPT} --filter=". ${filter_file}" "${backup_root}/" "${backup_mount_dir}/${new_backup}" &>${backup_log_file}
+      "time" ionice --class Idle nice -n 15 rsync ${COMMON_OPT} --filter=". ${filter_file}" "${backup_root}/" "${backup_mount_dir}/${new_backup}" &>>${backup_log_file}
       err=$?    # get error code
   elif [ ! -z "${new_backup}" ]
   then
-      time nice rsync ${DRY} --filter=". ${filter_file}" --link-dest="${backup_mount_dir}/${last_backup}" "${backup_root}/" "${backup_mount_dir}/${new_backup}" &>${backup_log_file}
+      "time" ionice --class Idle nice -n 15 rsync ${COMMON_OPT} --filter=". ${filter_file}" --link-dest="${backup_mount_dir}/${last_backup}" "${backup_root}/" "${backup_mount_dir}/${new_backup}" &>>${backup_log_file}
       err=$?
   fi
   
@@ -476,7 +482,7 @@ function make_backup {
 #
 function plan_next_day {
 at 14:30 tomorrow <<END
-  ${bacula_script} -rid 0
+  ${backup_script} -rid 0
 END
 }  
 
@@ -487,7 +493,7 @@ END
 #
 function plan_next_hour {  
 at now + 15 minutes <<END
-  ${bacula_script} -rid ${RUN_ID}
+  ${backup_script} -rid ${RUN_ID}
 END
 }  
 
@@ -513,7 +519,6 @@ function umount_all {
 
 
 #################################################
-
 # parse parameters
 while [ -n "$1" ]
 do
@@ -522,6 +527,9 @@ do
     setup="yes"
   elif [ "$1" == "-u" ]; then
     umount_all
+    exit
+  elif [ "$1" == "-m" ]; then
+    backup_mount
     exit
   elif [ "$1" == "-rid" ]; then
     shift
@@ -559,7 +567,8 @@ else
         plan_next_hour
         exit 2
       else
-        mail -s "bacula_backup can not mount the backup point" "jan.brezina@tul.cz"
+        mail -s "bacula_backup can not mount the backup point" "jan.brezina@tul.cz" <<END        
+END
         exit 2
       fi  
     fi

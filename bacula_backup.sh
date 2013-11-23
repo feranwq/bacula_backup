@@ -4,13 +4,19 @@
 #
 # Usage:
 # 
-# bacula_backup.sh [-u] [-s]
+# bacula_backup.sh [-u] [-s] [-m]
 #
-# With parameter '-s', the script run a setup, which leads user through configuration of backup script and which creates
-# a backup filesystem in the file on the remote system (bacula).
+# -s            The script runs a setup, which leads user through configuration of backup script and which creates
+#               a backup filesystem in the file on the remote system (bacula).
 #
-# With parameter '-u', the script unmounts the backup filesystem and the remote filesystem.
+# -u            The script unmounts the backup filesystem and the remote filesystem.
 #
+# -m            The script mounts the backup filesystem and the remote filesystem (e.g. for restoring a particular file)
+# 
+# -rid <TRY>    Run backup in batch mode with given number of unsuccessful runs. Automatically reschedule next run.
+#               Regular runs are every day. Rescheduled every hour.
+#       
+# 
 # Without parameters, the script tries to mount the remote file-system and the backup file-system and if succeed
 # it:
 # 1) check for uncompleted backup and possibly starts rsync to complete it.
@@ -18,15 +24,17 @@
 # 3) If it is ${period_of_full_backup} form the last full backup it starts full backup (probably using copy of the previous last backup)
 #
 # TODO:
-# - reporting the backup process into a log file
+# - mount filesystems into /media directory since otherwise updatedb runs over all backups; /media tree is skipped in default configuration
+# - write into help which filesystems are mounted in /media
+# - try to unmount, when mount fails
+# - report by email if fails to backup 4 days in row
+# - do not make regular backup if an irregular was made same day (schedule regular after irregular is done)
 # - review possible output for batch part of the script (non setup part)
 # - setup CRON (with at command) during setup phase
 # - measure timings of full and incremental
 # - how to setup filter of dirs to copy, rsync filter is very flexible, but inconvenient
-# - automatically exclude mount points for bacula and backup
 # - how to treat files with wrong permissions (can not read ...)
-# - write total size of stored data to ONE common logfile 
-# - add '-m' parameter for mounting, always end with unmount 
+# - server side that allows creation of sparse files and download of the backup script
 #
 # Speed tests (
 # ------------------------
@@ -428,14 +436,13 @@ function make_backup {
   echo "${new_backup}" >> ${backup_log_file}
   echo >> ${backup_log_file}
     
-
+  set -x
   #DRY="-v -n" 
   # -v          Verbose.
   # --progess   Progress for individual files.
   # -x          Do not cross filesystem boundaries. Prevents recursion.
   # --chmod ... alow user to read
   COMMON_OPT="--stats -x -a --delete"
-  ulimit -u 1 
   if [ "${new_backup%%full_*}" != "${new_backup}" ]
   then
       # make full backup
@@ -457,7 +464,12 @@ function make_backup {
     mv "${backup_mount_dir}/${new_backup}" "${backup_mount_dir}/${new_backup#running_}"
     umount_all
   else 
-      if [ "${err}" == "23" ]  
+      if [ "${err}" == "24" ]
+      then
+        echo "Warning: Some file vanish during backup."
+        mv "${backup_mount_dir}/${new_backup}" "${backup_mount_dir}/${new_backup#running_}"
+        umount_all
+      elif [ "${err}" == "23" ]  
       then
         # check if there are only 'permision denied' complains in the log
         if ! cat ${backup_log_file} | grep "rsync:" | grep -v "Permission denied (13)"

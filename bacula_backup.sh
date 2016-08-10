@@ -29,6 +29,9 @@
 # - check that we have CIFS package (mount.cifs)
 # - mount filesystems into /media directory since otherwise updatedb runs over all backups; /media tree is skipped in default configuration
 # - write into help which filesystems are mounted in /media
+# - try to unmount, when mount fails
+# - report by email if fails to backup 4 days in row
+# - do not make regular backup if an irregular was made same day (schedule regular after irregular is done)
 # - make option --help 
 # - try to unmount, when mount fails
 # - report by email if fails to backup 4 days in row
@@ -124,14 +127,18 @@ loop_device="/dev/loop0"
 # also username should not contain spaces
 bacula_UNC="//bacula.nti.tul.cz"
 backup_file="private/backup_sparse_image"
-bacula_losetup="${HOME}/.secure/.bacula_losetup"
+
+USER=`whoami`
+# encrypted FS is forced to mount with nosuid option so we must place
+# losetup binary to the main FS.
+bacula_losetup="/opt/bacula_backup/${USER}/bacula_losetup"
 filter_file="${HOME}/.secure/.filter_file"
 
 # script itself
 backup_script="${0}"
 
 # log file path - script dir + bacula_backup.log
-backup_log_file="${0%/*}/backula_backup.log"
+backup_log_file="${0%/*}/bacula_backup.log"
 
 # How often the incremental backup is made - in hours.
 period_of_incremental_backup="24"
@@ -190,12 +197,12 @@ function modify_fstab {
   # modify /etc/fstab - add bacula mount
   cat /etc/fstab | grep -v "${bacula_mount_dir}" >/tmp/fstab_work
   echo "# bacula mount dir: ${bacula_mount_dir}" >> /tmp/fstab_work
-  echo "${bacula_UNC}/public/${user_name} ${bacula_mount_dir} cifs noauto,user,rw,credentials=${credit_file},_netdev,forceuid=${uid}   0 0 " >> /tmp/fstab_work
+  echo "${bacula_UNC}/public/${user_name} ${bacula_mount_dir} cifs noauto,users,rw,credentials=${credit_file},_netdev,forceuid,uid=${uid}   0 0 " >> /tmp/fstab_work
  
   # modify /etc/fstab - add backup mount
   cat /tmp/fstab_work | grep -v "${backup_mount_dir}" >/tmp/fstab_work2
   echo "# backup mount dir: ${backup_mount_dir}" >> /tmp/fstab_work2
-  echo "${loop_device} ${backup_mount_dir} ext4 noauto,user,rw   0 0 " >> /tmp/fstab_work2
+  echo "${loop_device} ${backup_mount_dir} ext4 noauto,users,rw   0 0 " >> /tmp/fstab_work2
   
   echo "I have to add bacula mount point and backup mount point into /etc/fstab, please enter your password:"
   sudo mv -f '/etc/fstab' '/etc/~fstab_save'
@@ -210,6 +217,7 @@ function modify_fstab {
 #
 # global vars: bacula_mount_dir, backup_file, loop_device, bacula_losetup
 function make_losetup_hook {
+  local losetup=`which losetup`  
   local backup_file_full="${bacula_mount_dir}/${backup_file}"
 
   cat <<END  >/tmp/bacula_source.c
@@ -219,11 +227,15 @@ function make_losetup_hook {
 #include <unistd.h>
 
 int main(int argc, char **argv) {
-  if (argc > 1 && argv[1][0] == 'd') 
-    system("losetup -d ${loop_device}");
-  else
-    system("losetup ${loop_device} ${backup_file_full}");
- return 0;
+  setuid(0);
+  if (argc > 1 && argv[1][0] == 'd')  {
+    char * const child_argv[] = { "${losetup}", "-d", "${loop_device}" , NULL};  
+    execv("${losetup}", child_argv);
+  } else    {
+    char * const child_argv[] = { "${losetup}", "${loop_device}", "${backup_file_full}" , NULL};  
+    execv("${losetup}", child_argv);
+  }  
+  return 0;
 }
 END
   gcc /tmp/bacula_source.c -o /tmp/bacula_losetup
@@ -232,6 +244,7 @@ END
   sudo chown root:root ${bacula_losetup}
   sudo chmod 4755 ${bacula_losetup} # set user ID and execute by every one  
 }
+
 
 function setup {
   make_creditial_file
@@ -244,7 +257,7 @@ function setup {
   make_losetup_hook
  
   # try to mount samba destination and create loop device
-  ${bacula_losetup} d              # remove possibly existing loop
+  sudo ${bacula_losetup} d              # remove possibly existing loop
   umount "${bacula_mount_dir}"
   if ! mount "${bacula_mount_dir}"
   then
@@ -297,9 +310,9 @@ function setup {
   echo "Setup sucessfull, this is root dir of backup filesystem:"
   ls -a "${backup_mount_dir}"
   
-  sudo umount "${backup_mount_dir}"  
+  umount "${backup_mount_dir}"  
   ${bacula_losetup} d 
-  sudo umount "${bacula_mount_dir}"
+  umount "${bacula_mount_dir}"
 }
 
 

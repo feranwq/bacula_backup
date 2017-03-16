@@ -15,7 +15,8 @@
 # 
 # -rid <TRY>    Run backup in batch mode with given number of unsuccessful runs. Automatically reschedule next run.
 #               Regular runs are every day. Rescheduled every hour.
-#       
+# 
+# -c            Clean backup. Remove all backup dirs older then 2 years. (see variable CLEANUP_PERIOD)
 # 
 # Without parameters, the script tries to mount the remote file-system and the backup file-system and if succeed
 # it:
@@ -146,6 +147,8 @@ period_of_incremental_backup="24"
 # How often the full backup is made - in days.
 period_of_full_backup="30"
 
+# Command '-c' will delete all folders alder then this number of days.
+cleanup_period=730 # two years
 
 # Empty if run in non-batch mode (i.e. from console).
 # Otherwise number of failures of backup_mount from 
@@ -545,6 +548,30 @@ function umount_all {
 }
 
 
+function clean_backup {
+    set +x
+    clean_dirs=`find "${backup_mount_dir}"  -mindepth 1 -maxdepth 1 -type d -ctime +$cleanup_period | sort | grep -v "lost+found"`
+    for f in $clean_dirs
+    do
+        echo ${f##*/}
+    done    
+        
+    read -p "Do you want to remove those directories? y/n [n]" yn
+    if [ "$yn" == "y" ]
+    then
+        
+        for f in $clean_dirs
+        do
+            echo "Removing: $f ..." 
+            time rm -rf $f
+        done    
+
+    else
+        echo "Cleanup canceled."
+    fi    
+    set -x
+}
+
 
 
 #################################################
@@ -560,6 +587,11 @@ do
   elif [ "$1" == "-m" ]; then
     backup_mount
     exit
+  elif [ "$1" == "-c" ]; then
+    backup_mount 
+    clean_backup
+    #umount_all
+    exit
   elif [ "$1" == "-rid" ]; then
     shift
     RUN_ID="$1"
@@ -570,6 +602,8 @@ do
   fi
 done  
 
+# ---------------------------------------------
+# Do backup.
 
 # look for configuration file
 if [ -n "$setup"  ]
